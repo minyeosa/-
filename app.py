@@ -8,6 +8,7 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 from google import genai
 from google.genai import types
+from streamlit_javascript import st_javascript
 
 # ─────────────────────────────────────────────
 # 기본값
@@ -87,12 +88,25 @@ st.caption("대본 → 분석 → 분할 → 프롬프트 → 이미지 자동 �
 
 with st.sidebar:
     st.header("⚙️ 설정")
-    api_key = st.text_input("🔑 Gemini API Key", type="password", placeholder="AIza...")
+
+    # localStorage에서 저장된 API Key 불러오기
+    saved_key = st_javascript("localStorage.getItem('gemini_api_key') || ''")
+    default_key = saved_key if isinstance(saved_key, str) and saved_key.startswith("AIza") else ""
+
+    api_key_input = st.text_input(
+        "🔑 Gemini API Key",
+        value=default_key,
+        type="password",
+        placeholder="AIza...",
+    )
+    if st.button("💾 저장", use_container_width=True):
+        st_javascript(f"localStorage.setItem('gemini_api_key', '{api_key_input}')")
+        st.success("API Key가 저장됐습니다!")
+
+    api_key = api_key_input
+    st.divider()
     image_model = st.text_input("🖼 이미지 모델 (나노바나나2)", value=DEFAULT_IMAGE_MODEL)
     text_model = st.text_input("📝 텍스트 모델", value=DEFAULT_TEXT_MODEL)
-    st.divider()
-    st.markdown("**필요 패키지**")
-    st.code("pip install streamlit google-genai Pillow", language="bash")
 
 
 # ─────────────────────────────────────────────
