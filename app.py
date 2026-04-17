@@ -2,6 +2,7 @@ import io
 import os
 import re
 import textwrap
+import time
 import zipfile
 
 import streamlit as st
@@ -168,6 +169,26 @@ generate = st.button(
 # 헬퍼 함수
 # ─────────────────────────────────────────────
 
+def call_with_retry(fn, max_retries: int = 5):
+    """429 오류 시 retryDelay만큼 대기 후 자동 재시도."""
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except Exception as e:
+            err = str(e)
+            if "429" in err or "RESOURCE_EXHAUSTED" in err:
+                # 오류 메시지에서 retryDelay 추출
+                m = re.search(r"'retryDelay':\s*'(\d+)s'", err)
+                wait = int(m.group(1)) + 2 if m else 30
+                if attempt < max_retries - 1:
+                    st.warning(f"⏳ API 한도 초과 — {wait}초 후 자동 재시도합니다... ({attempt+1}/{max_retries})")
+                    time.sleep(wait)
+                else:
+                    raise
+            else:
+                raise
+
+
 def parse_numbered_list(text: str) -> list[str]:
     """'1. 텍스트' 형태의 줄을 파싱해 리스트로 반환."""
     items = []
@@ -263,14 +284,14 @@ if generate and ready:
     with st.expander("✅ Step 1 — 대본 분석", expanded=True):
         with st.spinner("대본을 분석하는 중..."):
             try:
-                r = client.models.generate_content(
+                r = call_with_retry(lambda: client.models.generate_content(
                     model=text_model,
                     contents=(
                         "다음 대본을 분석해서 핵심 주제, 등장 캐릭터, "
                         "주요 장면, 전체 감정 톤을 간략히 정리해주세요.\n\n"
                         f"대본:\n{script}"
                     ),
-                )
+                ))
                 st.markdown(r.text)
             except Exception as e:
                 st.error(f"오류: {e}")
@@ -281,7 +302,7 @@ if generate and ready:
         with st.spinner("대본을 분할하는 중..."):
             try:
                 chars_per_cut = int(seconds_per_cut * 4.5)
-                r = client.models.generate_content(
+                r = call_with_retry(lambda: client.models.generate_content(
                     model=text_model,
                     contents=(
                         f"다음 대본을 한 컷당 {seconds_per_cut}초 기준으로 분할하세요.\n"
@@ -290,7 +311,7 @@ if generate and ready:
                         "번호와 텍스트 외 설명은 일절 출력하지 마세요.\n\n"
                         f"대본:\n{script}"
                     ),
-                )
+                ))
                 segments = parse_numbered_list(r.text.strip())
                 if not segments:
                     segments = [l.strip() for l in r.text.splitlines() if l.strip()]
@@ -313,14 +334,14 @@ if generate and ready:
         with st.spinner(f"자막 번역 중 ({subtitle_lang})..."):
             try:
                 segments_joined = "\n".join(f"{i+1}. {s}" for i, s in enumerate(segments))
-                r = client.models.generate_content(
+                r = call_with_retry(lambda: client.models.generate_content(
                     model=text_model,
                     contents=(
                         f"아래 번호별 한국어 텍스트를 {lang_name}로 번역하세요.\n"
                         "'1. 번역문' 형식으로만 출력하세요. 설명 금지.\n\n"
                         f"{segments_joined}"
                     ),
-                )
+                ))
                 subtitle_texts = parse_numbered_list(r.text.strip())
                 if len(subtitle_texts) < len(segments):
                     # 부족하면 원본으로 채움
@@ -336,7 +357,7 @@ if generate and ready:
                 segments_text = "\n".join(
                     f"{i+1}. {s}" for i, s in enumerate(segments)
                 )
-                r = client.models.generate_content(
+                r = call_with_retry(lambda: client.models.generate_content(
                     model=text_model,
                     contents=(
                         f"{SYSTEM_INSTRUCTION}\n\n"
@@ -345,7 +366,7 @@ if generate and ready:
                         "'1. 프롬프트' 형식으로만 출력하세요. 설명·주석 금지.\n\n"
                         f"[장면 목록]\n{segments_text}"
                     ),
-                )
+                ))
                 prompts = parse_prompts(r.text.strip(), len(segments))
 
                 for i, p in enumerate(prompts, 1):
@@ -370,13 +391,13 @@ if generate and ready:
             sub_text = subtitle_texts[i] if i < len(subtitle_texts) else ""
 
             try:
-                img_response = client.models.generate_content(
+                img_response = call_with_retry(lambda: client.models.generate_content(
                     model=image_model,
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         response_modalities=["IMAGE"],
                     ),
-                )
+                ))
 
                 img_data: bytes | None = None
                 for part in img_response.candidates[0].content.parts:
